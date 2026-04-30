@@ -1,35 +1,25 @@
 const express = require("express");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleGenAI } = require("@google/genai");
 
 const app = express();
 app.use(express.json());
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-const chatHistories = {};
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 app.post("/webhook", async (req, res) => {
   const userRequest = req.body.userRequest;
-  const userId = userRequest.user.id;
   const userMessage = userRequest.utterance;
 
   try {
-    if (!chatHistories[userId]) {
-      chatHistories[userId] = model.startChat({
-        history: [],
-        generationConfig: { maxOutputTokens: 1000 },
-      });
-    }
-
-    const chat = chatHistories[userId];
-    const result = await chat.sendMessage(userMessage);
-    const responseText = result.response.text();
+    const response = await ai.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: userMessage,
+    });
 
     res.json({
       version: "2.0",
       template: {
-        outputs: [{ simpleText: { text: responseText } }],
+        outputs: [{ simpleText: { text: response.text } }],
       },
     });
   } catch (error) {
