@@ -1,25 +1,32 @@
 const express = require("express");
-const { GoogleGenAI } = require("@google/genai");
 
 const app = express();
 app.use(express.json());
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
 app.post("/webhook", async (req, res) => {
-  const userRequest = req.body.userRequest;
-  const userMessage = userRequest.utterance;
+  const userMessage = req.body.userRequest.utterance;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
-      contents: userMessage,
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "llama-3.1-8b-instant",
+        messages: [{ role: "user", content: userMessage }],
+        max_tokens: 1000
+      })
     });
+
+    const data = await response.json();
+    const replyText = data.choices[0].message.content;
 
     res.json({
       version: "2.0",
       template: {
-        outputs: [{ simpleText: { text: response.text } }],
+        outputs: [{ simpleText: { text: replyText } }],
       },
     });
   } catch (error) {
@@ -33,7 +40,7 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-app.get("/", (req, res) => res.send("카카오 Gemini 챗봇 서버 실행 중!"));
+app.get("/", (req, res) => res.send("카카오 Groq 챗봇 서버 실행 중!"));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`서버 실행: http://localhost:${PORT}`));
