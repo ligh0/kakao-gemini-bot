@@ -24,11 +24,14 @@ app.post("/webhook", async (req, res) => {
     const replyText = data.choices[0].message.content;
 
     res.json({
-      version: "2.0",
-      template: {
-        outputs: [{ simpleText: { text: replyText } }],
-      },
-    });
+  version: "2.0",
+  template: {
+    outputs: [{ simpleText: { text: replyText } }],
+  },
+  data: {
+    response: replyText
+  }
+});
   } catch (error) {
     console.error("Error:", error);
     res.json({
