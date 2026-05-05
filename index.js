@@ -7,7 +7,7 @@ app.post("/webhook", async (req, res) => {
   const userMessage = req.body.userRequest.utterance;
   const API_KEY = process.env.GEMINI_API_KEY;
   
-  // 주소와 모델 형식을 가장 안정적인 v1beta 규격으로 재설정
+  // 모델 이름을 경로 포함해서 정확하게 작성 (핵심 수정 사항)
   const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
 
   try {
@@ -15,17 +15,13 @@ app.post("/webhook", async (req, res) => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: userMessage }] }],
-        safetySettings: [
-          { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-        ]
+        contents: [{ parts: [{ text: userMessage }] }]
       })
     });
 
     const data = await response.json();
+    
+    // 로그로 원본 데이터 확인
     console.log("Gemini Raw Data:", JSON.stringify(data));
 
     if (data.candidates && data.candidates[0] && data.candidates[0].content) {
