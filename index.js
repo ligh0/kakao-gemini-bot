@@ -7,8 +7,9 @@ app.post("/webhook", async (req, res) => {
   const userMessage = req.body.userRequest.utterance;
   const API_KEY = process.env.GEMINI_API_KEY;
   
-  // 모델 이름을 경로 포함해서 정확하게 작성 (핵심 수정 사항)
-  const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
+  // 캡처 화면에 있는 가장 최신 모델인 Gemini 3 Flash Preview 사용
+  const MODEL = "gemini-3-flash-preview"; 
+  const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`;
 
   try {
     const response = await fetch(API_URL, {
@@ -20,8 +21,6 @@ app.post("/webhook", async (req, res) => {
     });
 
     const data = await response.json();
-    
-    // 로그로 원본 데이터 확인
     console.log("Gemini Raw Data:", JSON.stringify(data));
 
     if (data.candidates && data.candidates[0] && data.candidates[0].content) {
@@ -37,7 +36,7 @@ app.post("/webhook", async (req, res) => {
       res.json({
         version: "2.0",
         template: {
-          outputs: [{ simpleText: { text: "제미나이가 대답을 생성하지 못했어요. 다시 말씀해 주세요!" } }]
+          outputs: [{ simpleText: { text: "새로운 모델이라 대답을 생성하는 데 문제가 생겼나 봐요. 다시 말씀해 주세요!" } }]
         }
       });
     }
@@ -52,7 +51,7 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-app.get("/", (req, res) => res.send("카카오 제미나이 챗봇 서버 작동 중!"));
+app.get("/", (req, res) => res.send("카카오 Gemini 3 챗봇 서버 작동 중!"));
 app.get("/health", (req, res) => res.status(200).send("OK"));
 
 const PORT = process.env.PORT || 10000;
