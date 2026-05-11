@@ -5,16 +5,17 @@ const app = express();
 app.use(express.json());
 
 // 진행 중인 작업 및 완료된 답변 저장소
-const taskStatus = new Map(); // 'PENDING' 또는 'COMPLETED'
+const taskStatus = new Map(); 
 const responseCache = new Map();
 
+// 변수 이름을 GEMINI_API_KEY로 확실히 통일!
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const MODEL = "gemini-2.5-flash-lite";
 
 app.post("/webhook", async (req, res) => {
   const userId = req.body.userRequest?.user?.id;
   const userMessage = req.body.userRequest?.utterance || "";
-  const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`;
+  const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}`;
   
   const cacheKey = `${userId}_${userMessage}`;
 
@@ -26,11 +27,11 @@ app.post("/webhook", async (req, res) => {
     return res.json({ version: "2.0", template: { outputs: [{ simpleText: { text: reply } }] } });
   }
 
-  // 2. 이미 생성이 진행 중인 경우 -> 사용자에게 조금 더 기다려달라고 함
+  // 2. 이미 생성이 진행 중인 경우 -> 조금만 더 기다려달라고 함
   if (taskStatus.get(cacheKey) === "PENDING") {
     return res.json({
       version: "2.0",
-      template: { outputs: [{ simpleText: { text: "답변을 거의 다 만들었어요! 딱 2초만 있다가 한 번 더 말씀해 주세요. 🏃‍♂️" } }] }
+      template: { outputs: [{ simpleText: { text: `🏃‍♂️ '${userMessage}'에 대해 거의 다 만들었어요! 딱 2초 뒤에 한 번만 더 물어봐 주세요.` } }] }
     });
   }
 
@@ -44,7 +45,7 @@ app.post("/webhook", async (req, res) => {
     new Promise(resolve => setTimeout(() => resolve("TIMEOUT"), 4000))
   ]);
 
-  if (waitResponse !== "TIMEOUT") {
+  if (waitResponse !== "TIMEOUT" && waitResponse !== "ERROR") {
     responseCache.delete(cacheKey);
     taskStatus.delete(cacheKey);
     return res.json({ version: "2.0", template: { outputs: [{ simpleText: { text: waitResponse } }] } });
@@ -60,7 +61,7 @@ app.post("/webhook", async (req, res) => {
 async function waitForResult(key) {
   while (true) {
     if (responseCache.has(key)) return responseCache.get(key);
-    if (!taskStatus.has(key)) return "TIMEOUT"; 
+    if (!taskStatus.has(key)) return "ERROR"; 
     await new Promise(r => setTimeout(r, 500));
   }
 }
@@ -76,6 +77,14 @@ async function generateGemini(key, message, url) {
       })
     });
     const data = await response.json();
+    
+    // 에러 핸들링 보강
+    if (data.error) {
+      console.error("Gemini API 에러:", data.error.message);
+      taskStatus.delete(key);
+      return;
+    }
+
     const reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
     if (reply) {
       responseCache.set(key, reply);
@@ -83,7 +92,7 @@ async function generateGemini(key, message, url) {
     }
   } catch (e) {
     taskStatus.delete(key);
-    console.error(e);
+    console.error("서버 에러:", e);
   }
 }
 
