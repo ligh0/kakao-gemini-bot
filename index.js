@@ -1,140 +1,76 @@
 const express = require("express");
-
-// node-fetch v3 대응
-const fetch = (...args) =>
-  import("node-fetch").then(({ default: fetch }) => fetch(...args));
+const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 const app = express();
-
 app.use(express.json());
 
-// Gemini 설정
+// 전역 변수로 답변 저장소(캐시) 생성
+const responseCache = new Map();
+
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const MODEL = "gemini-2.5-flash-lite";
 
-/**
- * 카카오 챗봇 Webhook
- *
- * 동작 방식:
- * 1. Gemini API 호출 시작
- * 2. 최대 4.5초까지 기다림
- * 3. 4.5초 안에 답변이 오면 바로 최종 답변 반환
- * 4. 4.5초를 초과하거나 오류가 발생하면 안내 메시지 반환
- */
 app.post("/webhook", async (req, res) => {
+  const userId = req.body.userRequest?.user?.id; // 사용자 식별값
   const userMessage = req.body.userRequest?.utterance || "안녕";
+  const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}`;
 
-  // API 키 확인
-  if (!GEMINI_API_KEY) {
+  // 1. 이미 캐시에 저장된 답변이 있는지 확인 (사용자가 다시 말을 걸었을 때)
+  if (responseCache.has(userId)) {
+    const cachedReply = responseCache.get(userId);
+    responseCache.delete(userId); // 사용했으니 삭제
     return res.status(200).json({
       version: "2.0",
-      template: {
-        outputs: [
-          {
-            simpleText: {
-              text: "API 키가 설정되지 않았습니다.",
-            },
-          },
-        ],
-      },
+      template: { outputs: [{ simpleText: { text: cachedReply } }] }
     });
   }
 
-  const API_URL =
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-
-  // 4.5초 타임아웃 Promise
-  const timeoutPromise = new Promise((_, reject) => {
-    setTimeout(() => reject(new Error("TIMEOUT")), 4500);
-  });
-
-  // Gemini 호출 Promise
-  const geminiPromise = (async () => {
-    console.log("Gemini API 호출 시작");
-
-    const response = await fetch(API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `10자 이내로 답해: ${userMessage}`,
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          maxOutputTokens: 20,
-          temperature: 0,
-        },
-      }),
-    });
-
-    console.log("Gemini API 응답 상태:", response.status);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Gemini API 오류:", errorText);
-      throw new Error(`Gemini API Error: ${response.status}`);
+  // 2. 답변이 없다면 Gemini 호출 시작 (비동기 처리)
+  // 이 작업을 '기다리지 않고' 백그라운드에서 실행하게 함
+  const geminiTask = (async () => {
+    try {
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: userMessage }] }], // 글자수 제한 풀고 싶은 만큼 풀어도 됨!
+          generationConfig: { maxOutputTokens: 500, temperature: 0.7 }
+        })
+      });
+      const data = await response.json();
+      const reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+      if (reply) {
+        responseCache.set(userId, reply); // 답변이 완성되면 캐시에 저장
+        // 5분 후 캐시 자동 삭제 (메모리 관리)
+        setTimeout(() => responseCache.delete(userId), 300000);
+      }
+    } catch (e) {
+      console.error("Gemini 백그라운드 생성 중 오류:", e);
     }
-
-    const data = await response.json();
-
-    const replyText =
-      data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
-      "잘 모르겠어요.";
-
-    console.log("Gemini 응답:", replyText);
-
-    return replyText;
   })();
 
-  try {
-    // Gemini 응답과 타임아웃 중 먼저 완료되는 것 선택
-    const replyText = await Promise.race([
-      geminiPromise,
-      timeoutPromise,
-    ]);
+  // 3. 딱 4초만 기다려보고 답이 오면 바로 주고, 아니면 안내 멘트 발송
+  const waitResponse = await Promise.race([
+    geminiTask.then(() => "COMPLETED"), 
+    new Promise(resolve => setTimeout(() => resolve("TIMEOUT"), 4000))
+  ]);
 
-    // 4.5초 안에 완료되면 바로 응답
-    return res.status(200).json({
+  if (waitResponse === "COMPLETED" && responseCache.has(userId)) {
+    // 4초 안에 기적적으로 답변이 완성된 경우
+    const replyText = responseCache.get(userId);
+    responseCache.delete(userId);
+    return res.json({ version: "2.0", template: { outputs: [{ simpleText: { text: replyText } }] } });
+  } else {
+    // 4초가 넘어가면 일단 기다려달라고 함
+    return res.json({
       version: "2.0",
       template: {
-        outputs: [
-          {
-            simpleText: {
-              text: replyText,
-            },
-          },
-        ],
-      },
-    });
-  } catch (error) {
-    console.error("Gemini Timeout/Error:", error.message);
-
-    // 4.5초 초과 또는 오류 발생
-    return res.status(200).json({
-      version: "2.0",
-      template: {
-        outputs: [
-          {
-            simpleText: {
-              text: "잠시 후 다시 말씀해 주세요 😊",
-            },
-          },
-        ],
-      },
+        outputs: [{ simpleText: { text: "내용이 길어서 정리 중이에요! 3초만 있다가 아무 말이나 한 번 더 해주세요! 😊" } }]
+      }
     });
   }
 });
 
-// 상태 확인용
-app.get("/", (req, res) => {
-  res.status(200).send("Kakao Gemini Bot is running!");
-});
+app.get("/", (req, res) => res.status(200).send("Vercel 캐시 봇 작동 중!"));
 
 module.exports = app;
