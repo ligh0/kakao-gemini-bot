@@ -8,56 +8,50 @@ app.post("/webhook", async (req, res) => {
   const MODEL = "gemini-3.1-flash-lite-preview"; 
   const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`;
 
-  // 1. 카카오 5초 제한을 지키기 위한 4.7초 타임아웃
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 4700);
-
   try {
     const response = await fetch(API_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      signal: controller.signal, 
       body: JSON.stringify({
-        contents: [{ parts: [{ text: userMessage }] }],
+        contents: [{ 
+          parts: [{ 
+            // 시스템 프롬프트를 사용자 메시지 앞에 살짝 붙여서 짧은 답변 유도
+            text: `너는 카카오톡 챗봇이야. 답변은 무조건 3문장 이내로 아주 간결하고 친절하게 대답해줘. 질문: ${userMessage}` 
+          }] 
+        }],
         generationConfig: {
-          maxOutputTokens: 1000, // 길이는 유지!
+          maxOutputTokens: 200, // 답변 길이를 제한해서 속도 확보
           temperature: 0.7,
         }
       })
     });
 
-    clearTimeout(timeoutId);
     const data = await response.json();
-
+    
     if (data.candidates && data.candidates[0]) {
       const replyText = data.candidates[0].content.parts[0].text;
       return res.json({
         version: "2.0",
-        template: { outputs: [{ simpleText: { text: replyText } }] }
-      });
-    }
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      console.log("4.7초 초과! 타임아웃 발생");
-      // 2. 시간이 초과되었을 때 '응답 오류' 알림 대신 보낼 최소한의 멘트
-      return res.json({
-        version: "2.0",
         template: {
-          outputs: [{ simpleText: { text: "내용이 길어서 정리 중이에요! 3초만 있다가 다시 한번 '뭐해'라고 물어봐 주시면 바로 보여드릴게요! 🙏" } }]
+          outputs: [{ simpleText: { text: replyText } }]
         }
       });
     }
+  } catch (error) {
+    console.error("Critical Error:", error);
   }
 
-  // 예외 상황 발생 시
-  if (!res.headersSent) {
-    res.json({
-      version: "2.0",
-      template: { outputs: [{ simpleText: { text: "잠시 후 다시 시도해 주세요." } }] }
-    });
-  }
+  // 실패 시 기본 응답
+  res.json({
+    version: "2.0",
+    template: {
+      outputs: [{ simpleText: { text: "지금은 대화가 조금 어렵네요. 짧게 다시 말씀해 주시겠어요?" } }]
+    }
+  });
 });
 
+app.get("/", (req, res) => res.send("카카오 챗봇 서버 작동 중!"));
 app.get("/health", (req, res) => res.status(200).send("OK"));
+
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`서버 실행 중: ${PORT}`));
+app.listen(PORT, () => console.log(`서버 포트 ${PORT} 실행 중`));
