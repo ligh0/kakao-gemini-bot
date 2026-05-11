@@ -15,13 +15,13 @@ app.post("/webhook", async (req, res) => {
       body: JSON.stringify({
         contents: [{ 
           parts: [{ 
-            // 시스템 프롬프트를 사용자 메시지 앞에 살짝 붙여서 짧은 답변 유도
-            text: `너는 카카오톡 챗봇이야. 답변은 무조건 3문장 이내로 아주 간결하고 친절하게 대답해줘. 질문: ${userMessage}` 
+            // 지시사항을 더 강력하고 짧게 수정
+            text: `카톡 챗봇이야. 2문장 내로 핵심만 짧게 대답해. 질문: ${userMessage}` 
           }] 
         }],
         generationConfig: {
-          maxOutputTokens: 200, // 답변 길이를 제한해서 속도 확보
-          temperature: 0.7,
+          maxOutputTokens: 150, // 길이를 확 줄여서 전송 속도 업그레이드
+          temperature: 0.5,     // 낮을수록 답변 속도가 빨라짐
         }
       })
     });
@@ -38,20 +38,20 @@ app.post("/webhook", async (req, res) => {
       });
     }
   } catch (error) {
-    console.error("Critical Error:", error);
+    console.error("Timeout or Error:", error);
   }
 
-  // 실패 시 기본 응답
-  res.json({
-    version: "2.0",
-    template: {
-      outputs: [{ simpleText: { text: "지금은 대화가 조금 어렵네요. 짧게 다시 말씀해 주시겠어요?" } }]
-    }
-  });
+  // 5초 임박 시 카톡 에러 알림 대신 보낼 기본 메시지
+  if (!res.headersSent) {
+    res.json({
+      version: "2.0",
+      template: {
+        outputs: [{ simpleText: { text: "방금 답변을 준비했는데 카톡이 끊겼네요! 한 번만 더 말씀해 주시겠어요?" } }]
+      }
+    });
+  }
 });
 
-app.get("/", (req, res) => res.send("카카오 챗봇 서버 작동 중!"));
 app.get("/health", (req, res) => res.status(200).send("OK"));
-
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`서버 포트 ${PORT} 실행 중`));
+app.listen(PORT, () => console.log(`서버 실행 중: ${PORT}`));
