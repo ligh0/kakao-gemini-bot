@@ -4,72 +4,70 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 const app = express();
 app.use(express.json());
 
-// 상태 관리 및 답변 저장소
-const taskMap = new Map(); // 'PENDING' 또는 답변 텍스트 저장
+// 주머니(캐시): 사용자ID를 키로 해서 '최신 상태'를 저장
+const userSession = new Map(); 
 
-// 환경변수 이름은 Vercel 설정과 똑같이 맞췄어
 const G_KEY = process.env.GEMINI_API_KEY;
 const MODEL = "gemini-2.5-flash-lite";
 
 app.post("/webhook", async (req, res) => {
   const userId = req.body.userRequest?.user?.id || "unknown";
   const userMsg = req.body.userRequest?.utterance || "";
-  const cacheKey = `${userId}_${userMsg}`;
-
-  // 1. 이미 답변이 완성되어 저장되어 있는 경우 -> 즉시 반환
-  const existingTask = taskMap.get(cacheKey);
-  if (existingTask && existingTask !== "PENDING") {
-    taskMap.delete(cacheKey); // 사용 후 삭제
-    return res.json({
-      version: "2.0",
-      template: { outputs: [{ simpleText: { text: existingTask } }] }
-    });
-  }
-
-  // 2. 이미 생성이 진행 중인 경우 -> 사용자에게 재시도 안내
-  if (existingTask === "PENDING") {
-    return res.json({
-      version: "2.0",
-      template: { outputs: [{ simpleText: { text: "🏃‍♂️ 답변을 거의 다 만들었어요! 3초만 있다가 한 번 더 말씀해 주세요." } }] }
-    });
-  }
-
-  // 3. 완전히 새로운 질문인 경우 -> 생성 시작
-  taskMap.set(cacheKey, "PENDING");
   
-  // 백그라운드에서 제미나이 호출 (결과를 taskMap에 저장)
-  runGemini(cacheKey, userMsg);
+  // 1. 주머니 확인
+  const session = userSession.get(userId);
 
-  // 첫 질문 시 4초만 기다려보고 완성되면 바로 응답, 아니면 안내 발송
+  // 2. 만약 답변이 완성된 상태라면? 사용자가 뭐라고 묻든(예: "답 줘", "ㅎㅇ") 바로 답변 투척!
+  if (session && session.status === "COMPLETED") {
+    const finalReply = session.reply;
+    userSession.delete(userId); // 답 줬으니까 주머니 비우기
+    return res.json({
+      version: "2.0",
+      template: { outputs: [{ simpleText: { text: finalReply } }] }
+    });
+  }
+
+  // 3. 만약 아직 만드는 중(PENDING)이라면?
+  if (session && session.status === "PENDING") {
+    return res.json({
+      version: "2.0",
+      template: { outputs: [{ simpleText: { text: "아직 열심히 정리 중이에요! 3초만 더 기다렸다가 '답 나왔어?'라고 물어봐 주세요. 🏃‍♂️" } }] }
+    });
+  }
+
+  // 4. 완전히 새로운 질문인 경우
+  userSession.set(userId, { status: "PENDING", lastMsg: userMsg });
+  
+  // 백그라운드에서 제미나이 가동
+  runGemini(userId, userMsg);
+
+  // 첫 질문 시 딱 4초만 기다려봄
   const result = await Promise.race([
-    waitForReply(cacheKey),
+    waitForReply(userId),
     new Promise(resolve => setTimeout(() => resolve("TIMEOUT"), 4000))
   ]);
 
   if (result !== "TIMEOUT" && result !== "ERROR") {
-    taskMap.delete(cacheKey);
+    userSession.delete(userId);
     return res.json({ version: "2.0", template: { outputs: [{ simpleText: { text: result } }] } });
   } else {
-    // 4초가 지나면 일단 대피
     return res.json({
       version: "2.0",
-      template: { outputs: [{ simpleText: { text: `'${userMsg}'에 대해 생각 중이에요! 잠시 후 다시 물어봐 주세요. 😊` } }] }
+      template: { outputs: [{ simpleText: { text: "내용이 좀 길어서 생각할 시간이 필요해요. 잠시 후 '결과 알려줘'라고 말씀해 주세요! 😊" } }] }
     });
   }
 });
 
-// 답변이 완성될 때까지 0.5초 간격으로 확인하는 함수
-async function waitForReply(key) {
+async function waitForReply(uid) {
   while (true) {
-    const val = taskMap.get(key);
-    if (val && val !== "PENDING") return val;
-    if (!taskMap.has(key)) return "ERROR";
+    const session = userSession.get(uid);
+    if (session && session.status === "COMPLETED") return session.reply;
+    if (!session) return "ERROR";
     await new Promise(r => setTimeout(r, 500));
   }
 }
 
-// 실제 제미나이 호출 함수
-async function runGemini(key, msg) {
+async function runGemini(uid, msg) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${G_KEY}`;
   try {
     const response = await fetch(url, {
@@ -77,24 +75,22 @@ async function runGemini(key, msg) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: msg }] }],
-        generationConfig: { maxOutputTokens: 500, temperature: 0.7 }
+        generationConfig: { maxOutputTokens: 600, temperature: 0.7 }
       })
     });
     const data = await response.json();
     const reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
     
     if (reply) {
-      taskMap.set(key, reply);
-      // 5분 후 자동 삭제
-      setTimeout(() => taskMap.delete(key), 300000);
+      userSession.set(uid, { status: "COMPLETED", reply: reply });
+      // 5분 뒤 자동 삭제 (안 물어보고 나가는 경우 대비)
+      setTimeout(() => userSession.delete(uid), 300000);
     } else {
-      taskMap.delete(key);
+      userSession.delete(uid);
     }
   } catch (e) {
-    console.error("Gemini Error:", e);
-    taskMap.delete(key);
+    userSession.delete(uid);
   }
 }
 
-app.get("/", (req, res) => res.send("Vercel Gemini Bot is Active!"));
 module.exports = app;
